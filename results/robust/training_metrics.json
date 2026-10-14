@@ -1,0 +1,25 @@
+{
+  "best_psnr": 40.45377476715921,
+  "final_train_loss": 0.03579289653873819,
+  "final_val_psnr": 39.6244224114527,
+  "final_val_ssim": 1.1348413228988647,
+  "total_time": 2239.5011637210846,
+  "config": {
+    "model_type": "robust",
+    "num_epochs": 30,
+    "batch_size": 8,
+    "num_frames": 4,
+    "scale_factor": 2,
+    "reg_error_std": 0.3,
+    "learning_rate": 0.001,
+    "num_channels": 64,
+    "num_res_blocks": 8,
+    "patch_size": 64,
+    "save_dir": "C:\\Users\\sannidhya\\OneDrive - BIRLA INSTITUTE OF TECHNOLOGY and SCIENCE\\Desktop\\Projects\\DSP Project\\checkpoints\\robust",
+    "results_dir": "C:\\Users\\sannidhya\\OneDrive - BIRLA INSTITUTE OF TECHNOLOGY and SCIENCE\\Desktop\\Projects\\DSP Project\\results\\robust",
+    "edge_weight": 0.1,
+    "use_perceptual": false,
+    "weight_decay": 1e-05,
+    "min_lr": 1e-06
+  }
+}
