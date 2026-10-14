@@ -98,12 +98,12 @@ MLEE/
 └── results/                  # Output figures and metrics
 ```
 
-## 📈 Expected Results
+## Expected Results
 
 The robustness curves show that as registration error increases:
 - Classical methods (IBP, Mean Fusion) degrade rapidly
 - Our ML method maintains significantly higher PSNR/SSIM
 
-## 📖 Reference
+## Reference
 
 Based on: *"Machine Learning Based Super-Resolution Algorithm Robust to Registration Errors"*
