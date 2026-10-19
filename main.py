@@ -83,7 +83,7 @@ def cmd_build_data(config):
         drop_last_n=config['pca']['drop_last_n'],
     )
     X_pca = pca.fit_transform(X)
-    print(f"  PCA: {X.shape[1]}D → {X_pca.shape[1]}D")
+    print(f"  PCA: {X.shape[1]}D -> {X_pca.shape[1]}D")
     print(f"  Variance explained by kept components: "
           f"{pca.explained_variance_ratio[:pca.final_dim].sum():.4f}")
 
