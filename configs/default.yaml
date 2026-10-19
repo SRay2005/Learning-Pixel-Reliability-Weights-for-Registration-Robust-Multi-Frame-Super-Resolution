@@ -18,14 +18,14 @@ grayscale: true  # Paper operates on grayscale images
 phase1:
   num_iterations: 3        # Paper specifies 3
   lambda_reg: 0.0          # Paper specifies lambda=0 for Phase 1
-  mu: 0.01                 # OUR CHOICE — not specified in paper, tuned on dev set
+  mu: 0.1                  # OUR CHOICE — tuned on dev set (best=0.1, PSNR=32.30)
   init: bicubic            # Paper: initial estimate = bicubic upscaling of g_c
 
 # --- Phase 2 SR (weighted by classifier) ---
 phase2:
-  num_iterations: 10       # OUR CHOICE — not specified in paper, tuned on dev set
+  num_iterations: 30       # OUR CHOICE — tuned on dev set (best=30 iters)
   lambda_reg: 0.0          # Paper-faithful: lambda=0. Second run: tune on dev set
-  mu: 0.01                 # OUR CHOICE — same as Phase 1 initially
+  mu: 0.1                  # OUR CHOICE — tuned on dev set (same as Phase 1)
   regulariser: laplacian   # Standard Tikhonov with Laplacian Q
 
 # --- Feature extraction ---
