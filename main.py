@@ -1,264 +1,287 @@
 """
-Main Runner Script for DSP Super-Resolution Project.
-
-This is the entry point that orchestrates the entire pipeline:
-  1. Download/prepare training data
-  2. Train the robust SR model
-  3. Train a baseline model (without robustness) for comparison
-  4. Run comprehensive evaluation
-  5. Generate all result figures
-  6. Launch the interactive demo
+Main entry point for the SR pipeline.
 
 Usage:
-    python main.py --mode all        # Run everything
-    python main.py --mode train      # Train only
-    python main.py --mode evaluate   # Evaluate only (needs trained model)
-    python main.py --mode demo       # Launch demo only
+    python main.py build_data     -- Generate training features from 42 images
+    python main.py train          -- Train all classifiers on the training data
+    python main.py evaluate       -- Run SR experiments and produce results
+    python main.py demo           -- Run a single SR demo on a test image
+    python main.py all            -- Run the full pipeline end-to-end
 """
 
 import os
 import sys
 import argparse
-import torch
 import numpy as np
+import yaml
 
-# Ensure project root is on the path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.utils import (download_sample_images, load_image, ensure_dir,
-                        create_comparison_figure, create_metrics_plot)
-from src.data_pipeline import SRDataPipeline
-from src.train import train_model
-from src.evaluate import SREvaluator
-from src.sr_model import get_model
+from src.utils import set_global_seed, load_image, save_image, ensure_dir
+from src.utils import compute_psnr, compute_ssim
 
 
-def setup_data():
-    """Download sample images for training and testing."""
+def load_config(path=None):
+    """Load configuration from YAML file."""
+    if path is None:
+        path = os.path.join(PROJECT_ROOT, 'configs', 'default.yaml')
+    with open(path, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def get_training_images(data_dir, n_images=42):
+    """Get paths to training images."""
+    hr_dir = os.path.join(data_dir, 'hr')
+    if not os.path.isdir(hr_dir):
+        raise FileNotFoundError(f"Data directory not found: {hr_dir}")
+
+    valid_ext = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+    paths = sorted([
+        os.path.join(hr_dir, f)
+        for f in os.listdir(hr_dir)
+        if os.path.splitext(f)[1].lower() in valid_ext
+    ])
+
+    if len(paths) < n_images:
+        print(f"  Warning: requested {n_images} images but found {len(paths)}")
+
+    return paths[:n_images]
+
+
+def cmd_build_data(config):
+    """Build training data: generate features from images."""
     print("\n" + "=" * 60)
-    print("  [STEP 1] Preparing Training Data")
+    print("  STAGE 1: Building Training Data")
     print("=" * 60)
-    
-    hr_dir = os.path.join(PROJECT_ROOT, 'data', 'hr')
-    ensure_dir(hr_dir)
-    
-    # Check if images already exist
-    existing = [f for f in os.listdir(hr_dir) 
-                if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    
-    if len(existing) >= 4:
-        print(f"  Found {len(existing)} existing images in {hr_dir}")
-        return hr_dir
-    
-    print("  Downloading sample images...")
-    paths = download_sample_images(hr_dir, num_images=8)
-    print(f"  [OK] Prepared {len(paths)} training images")
-    
-    return hr_dir
 
+    from src.training_data import build_training_data
+    from src.pca_transform import PCATransform
+    from src.data_split import split_by_image
 
-def train_robust_model(hr_dir, num_epochs=50, force=False, batch_size=8):
-    """Train the robust SR model (with registration error augmentation)."""
-    print("\n" + "=" * 60)
-    print("  [STEP 2] Training Robust SR Model")
-    print("=" * 60)
-    
-    save_dir = os.path.join(PROJECT_ROOT, 'checkpoints', 'robust')
-    results_dir = os.path.join(PROJECT_ROOT, 'results', 'robust')
-    
-    # Check if already trained
-    best_path = os.path.join(save_dir, 'best.pth')
-    if not force and os.path.exists(best_path):
-        print(f"  Found existing checkpoint: {best_path}")
-        print("  Loading pre-trained model...")
-        model = get_model('robust', num_frames=4, num_channels=64, num_res_blocks=8)
-        checkpoint = torch.load(best_path, map_location='cpu', weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        return model
-    
-    model, history = train_model(
-        hr_dir=hr_dir,
-        save_dir=save_dir,
-        results_dir=results_dir,
-        model_type='robust',
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        num_frames=4,
-        scale_factor=2,
-        reg_error_std=0.3,       # KEY: train with registration errors
-        learning_rate=1e-3,
-        num_channels=64,
-        num_res_blocks=8,
-        patch_size=64,
+    data_dir = os.path.join(PROJECT_ROOT, 'data')
+    image_paths = get_training_images(data_dir, config['training']['num_images'])
+
+    scale = config['scale_factor']
+    mu = config['phase1']['mu']
+    iters = config['phase1']['num_iterations']
+
+    X_clean, X_error, y_clean, y_error, ids_clean, ids_error = build_training_data(
+        image_paths, scale=scale, mu=mu, phase1_iters=iters,
+        seed=config['seed'],
     )
-    
-    # Also copy best checkpoint to the default location
-    default_ckpt_dir = os.path.join(PROJECT_ROOT, 'checkpoints')
-    ensure_dir(default_ckpt_dir)
-    if os.path.exists(best_path):
-        import shutil
-        shutil.copy2(best_path, os.path.join(default_ckpt_dir, 'best.pth'))
-    latest_path = os.path.join(save_dir, 'latest.pth')
-    if os.path.exists(latest_path):
-        import shutil
-        shutil.copy2(latest_path, os.path.join(default_ckpt_dir, 'latest.pth'))
-    
-    return model
 
+    # Combine clean and erroneous data
+    X = np.concatenate([X_clean, X_error], axis=0)
+    y = np.concatenate([y_clean, y_error], axis=0)
+    image_ids = np.concatenate([ids_clean, ids_error], axis=0)
 
-def train_baseline_model(hr_dir, num_epochs=50):
-    """Train baseline model WITHOUT registration error augmentation."""
-    print("\n" + "=" * 60)
-    print("  [STEP 2b] Training Baseline Model (no robustness)")
-    print("=" * 60)
-    
-    save_dir = os.path.join(PROJECT_ROOT, 'checkpoints', 'baseline')
-    results_dir = os.path.join(PROJECT_ROOT, 'results', 'baseline')
-    
-    best_path = os.path.join(save_dir, 'best.pth')
-    if os.path.exists(best_path):
-        print(f"  Found existing baseline checkpoint: {best_path}")
-        model = get_model('simple', num_frames=4, num_channels=64, num_res_blocks=8)
-        checkpoint = torch.load(best_path, map_location='cpu', weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        return model
-    
-    model, history = train_model(
-        hr_dir=hr_dir,
-        save_dir=save_dir,
-        results_dir=results_dir,
-        model_type='simple',        # No attention fusion
-        num_epochs=num_epochs,
-        batch_size=4,
-        num_frames=4,
-        scale_factor=2,
-        reg_error_std=0.0,          # NO registration error augmentation
-        learning_rate=1e-3,
-        num_channels=64,
-        num_res_blocks=8,
-        patch_size=64,
+    # Fit PCA on ALL features (clean + erroneous), as per paper
+    print("\n  Fitting PCA...")
+    pca = PCATransform(
+        n_components=config['pca']['total_raw_features'],
+        drop_last_n=config['pca']['drop_last_n'],
     )
-    
-    return model
+    X_pca = pca.fit_transform(X)
+    print(f"  PCA: {X.shape[1]}D -> {X_pca.shape[1]}D")
+    print(f"  Variance explained by kept components: "
+          f"{pca.explained_variance_ratio[:pca.final_dim].sum():.4f}")
+
+    # Save PCA
+    ckpt_dir = ensure_dir(os.path.join(PROJECT_ROOT, 'checkpoints'))
+    pca.save(os.path.join(ckpt_dir, 'pca.npz'))
+
+    # Split by image
+    splits = split_by_image(
+        X_pca, y, image_ids,
+        n_train_images=config['split']['num_train'],
+        n_dev_images=config['split']['num_dev'],
+        seed=config['seed'],
+    )
+
+    # Save splits
+    data_out = ensure_dir(os.path.join(PROJECT_ROOT, 'checkpoints', 'data'))
+    for split_name, split_data in splits.items():
+        np.savez(
+            os.path.join(data_out, f'{split_name}.npz'),
+            X=split_data['X'],
+            y=split_data['y'],
+            image_ids=split_data['image_ids'],
+        )
+
+    print(f"\n  [OK] Training data saved to {data_out}/")
+    return splits
 
 
-def evaluate_models(hr_dir, robust_model):
-    """Run comprehensive evaluation."""
+def cmd_train(config):
+    """Train all three classifiers."""
     print("\n" + "=" * 60)
-    print("  [STEP 3] Comprehensive Evaluation")
+    print("  STAGE 2: Training Classifiers")
     print("=" * 60)
-    
-    results_dir = os.path.join(PROJECT_ROOT, 'results')
-    ensure_dir(results_dir)
-    
-    # Get test images
-    hr_paths = []
-    for f in sorted(os.listdir(hr_dir)):
-        if f.lower().endswith(('.png', '.jpg', '.jpeg')):
-            hr_paths.append(os.path.join(hr_dir, f))
-    
-    if not hr_paths:
-        print("  Error: No test images found!")
+
+    from src.classifiers import (
+        LogisticRegressionClassifier,
+        KernelSVMClassifier,
+        GDAClassifier,
+    )
+
+    # Load training data
+    data_dir = os.path.join(PROJECT_ROOT, 'checkpoints', 'data')
+    train_data = np.load(os.path.join(data_dir, 'train.npz'))
+    X_train, y_train = train_data['X'], train_data['y']
+
+    dev_data = np.load(os.path.join(data_dir, 'dev.npz'))
+    X_dev, y_dev = dev_data['X'], dev_data['y']
+
+    ckpt_dir = ensure_dir(os.path.join(PROJECT_ROOT, 'checkpoints', 'classifiers'))
+
+    classifiers = [
+        LogisticRegressionClassifier(
+            learning_rate=config['logistic']['learning_rate'],
+            max_iterations=config['logistic']['max_iterations'],
+            l2_lambda=config['logistic']['l2_lambda'],
+        ),
+        KernelSVMClassifier(
+            C=config['svm']['C'],
+            gamma=config['svm']['gamma'],
+        ),
+        GDAClassifier(
+            cov_reg_eps=config['gda']['cov_reg_eps'],
+        ),
+    ]
+
+    for clf in classifiers:
+        print(f"\n  Training {clf.name}...")
+        train_time = clf.timed_fit(X_train, y_train)
+
+        # Dev set evaluation
+        probs_dev, pred_time = clf.timed_predict_proba(X_dev)
+        preds_dev = (probs_dev >= 0.5).astype(int)
+        acc = (preds_dev == y_dev).mean()
+
+        print(f"    Train time:  {train_time:.2f}s")
+        print(f"    Pred time:   {pred_time:.4f}s ({len(X_dev)} samples)")
+        print(f"    Dev accuracy: {acc:.4f}")
+        print(f"    Param count: {clf.param_count}")
+
+        # Save
+        ext = '.npz' if not isinstance(clf, KernelSVMClassifier) else '.joblib'
+        clf.save(os.path.join(ckpt_dir, f'{clf.name}{ext}'))
+
+    print(f"\n  [OK] Classifiers saved to {ckpt_dir}/")
+
+
+def cmd_demo(config):
+    """Run a simple SR demo on a test image."""
+    print("\n" + "=" * 60)
+    print("  DEMO: Single Image SR")
+    print("=" * 60)
+
+    from src.observation_model import bicubic_upsample, downsample_nonoverlapping_avg, apply_shift
+    from src.sr_solver import sr_phase1, sr_phase2, sr_unweighted
+    from src.artifact_detector import ArtifactDetector
+    from src.pca_transform import PCATransform
+    from src.classifiers import LogisticRegressionClassifier
+
+    # Load a test image
+    data_dir = os.path.join(PROJECT_ROOT, 'data', 'hr')
+    test_images = sorted([
+        os.path.join(data_dir, f) for f in os.listdir(data_dir)
+        if f.lower().endswith('.png')
+    ])
+
+    if not test_images:
+        print("  No test images found!")
         return
-    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    robust_model = robust_model.to(device)
-    
-    evaluator = SREvaluator(scale_factor=2, num_frames=4, device=device)
-    
-    # Full evaluation
-    eval_results = evaluator.full_evaluation(
-        hr_paths, robust_model, results_dir
-    )
-    
-    print(f"\n  [OK] Results saved to {results_dir}/")
-    return eval_results
 
+    hr = load_image(test_images[0], color='gray')
+    scale = config['scale_factor']
+    H, W = hr.shape
+    H = (H // scale) * scale
+    W = (W // scale) * scale
+    hr = hr[:H, :W]
 
-def launch_demo():
-    """Launch the interactive Gradio demo."""
-    print("\n" + "=" * 60)
-    print("  [STEP 4] Launching Interactive Demo")
-    print("=" * 60)
-    
-    from demo.app import create_demo
-    demo = create_demo()
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=False,
-        show_error=True,
-    )
+    print(f"  Test image: {test_images[0]}")
+    print(f"  HR size: {H}x{W}")
+
+    # Generate synthetic LR frames
+    rng = np.random.RandomState(config['seed'])
+    n_frames = 4
+    lr_frames = []
+    shifts = np.zeros((n_frames, 2), dtype=np.float32)
+
+    for i in range(n_frames):
+        if i > 0:
+            dy = rng.uniform(-1.0, 1.0)
+            dx = rng.uniform(-1.0, 1.0)
+            shifts[i] = [dy / scale, dx / scale]
+            shifted_hr = apply_shift(hr, dy, dx)
+        else:
+            shifted_hr = hr
+        lr = downsample_nonoverlapping_avg(shifted_hr, scale)
+        lr_frames.append(lr)
+
+    # Bicubic baseline
+    bic = bicubic_upsample(lr_frames[0], scale)
+    psnr_bic = compute_psnr(bic[:H, :W], hr)
+    print(f"  Bicubic PSNR: {psnr_bic:.2f} dB")
+
+    # Unweighted SR
+    sr_uw = sr_unweighted(lr_frames, shifts, scale,
+                          mu=config['phase2']['mu'],
+                          num_iterations=config['phase2']['num_iterations'])
+    psnr_uw = compute_psnr(sr_uw[:H, :W], hr)
+    print(f"  Unweighted SR PSNR: {psnr_uw:.2f} dB")
+
+    # Save results
+    results_dir = ensure_dir(os.path.join(PROJECT_ROOT, 'results'))
+    save_image(bic[:H, :W], os.path.join(results_dir, 'demo_bicubic.png'))
+    save_image(sr_uw[:H, :W], os.path.join(results_dir, 'demo_unweighted_sr.png'))
+    save_image(hr, os.path.join(results_dir, 'demo_groundtruth.png'))
+
+    print(f"  [OK] Demo results saved to {results_dir}/")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='ML-Based Super-Resolution Robust to Registration Errors'
+        description='ML-Based SR Robust to Registration Errors'
     )
     parser.add_argument(
-        '--mode', type=str, default='all',
-        choices=['all', 'train', 'evaluate', 'demo', 'data'],
-        help='What to run: all, train, evaluate, demo, or data'
+        'command', type=str, nargs='?', default='demo',
+        choices=['build_data', 'train', 'evaluate', 'demo', 'all'],
+        help='Command to run',
     )
     parser.add_argument(
-        '--epochs', type=int, default=50,
-        help='Number of training epochs (default: 50)'
+        '--config', type=str, default=None,
+        help='Path to config YAML file',
     )
-    parser.add_argument(
-        '--quick', action='store_true',
-        help='Quick mode: fewer epochs for fast testing'
-    )
-    parser.add_argument(
-        '--force', action='store_true',
-        help='Force retraining even if checkpoint exists'
-    )
-    
+
     args = parser.parse_args()
-    
-    if args.quick:
-        args.epochs = 10
-    
+    config = load_config(args.config)
+
+    set_global_seed(config['seed'])
+
     print("\n" + "+" + "=" * 58 + "+")
-    print("|  ML-Based Super-Resolution Robust to Registration Errors  |")
-    print("|  DSP Project - BITS Pilani                                |")
+    print("|  Learning Pixel-Reliability Weights for                  |")
+    print("|  Registration-Robust Multi-Frame Super-Resolution        |")
     print("+" + "=" * 58 + "+")
-    print(f"\n  Mode: {args.mode}")
-    print(f"  Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
-    print(f"  Epochs: {args.epochs}")
-    print(f"  Force retrain: {args.force}")
-    
-    if args.mode in ['all', 'data', 'train']:
-        hr_dir = setup_data()
-    else:
-        hr_dir = os.path.join(PROJECT_ROOT, 'data', 'hr')
-    
-    if args.mode in ['all', 'train']:
-        robust_model = train_robust_model(hr_dir, num_epochs=args.epochs, force=args.force)
-    
-    if args.mode in ['all', 'evaluate']:
-        if args.mode == 'evaluate':
-            # Load pre-trained model
-            ckpt_path = os.path.join(PROJECT_ROOT, 'checkpoints', 'robust', 'best.pth')
-            if not os.path.exists(ckpt_path):
-                ckpt_path = os.path.join(PROJECT_ROOT, 'checkpoints', 'best.pth')
-            
-            if os.path.exists(ckpt_path):
-                robust_model = get_model('robust', num_frames=4, 
-                                        num_channels=64, num_res_blocks=8)
-                checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-                robust_model.load_state_dict(checkpoint['model_state_dict'])
-            else:
-                print("  Error: No trained model found! Run training first.")
-                return
-        
-        evaluate_models(hr_dir, robust_model)
-    
-    if args.mode in ['all', 'demo']:
-        launch_demo()
-    
-    print("\n  [DONE] All tasks completed!")
+    print(f"  Command: {args.command}")
+    print(f"  Seed: {config['seed']}")
+
+    if args.command in ('build_data', 'all'):
+        cmd_build_data(config)
+
+    if args.command in ('train', 'all'):
+        cmd_train(config)
+
+    if args.command in ('demo', 'all'):
+        cmd_demo(config)
+
+    if args.command == 'evaluate':
+        print("  [TODO] Full evaluation pipeline — Stage 4")
+
+    print("\n  [DONE]")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

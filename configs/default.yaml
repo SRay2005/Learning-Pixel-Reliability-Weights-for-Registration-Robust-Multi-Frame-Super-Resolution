@@ -1,0 +1,96 @@
+# =============================================================================
+# Default configuration for the paper's SR pipeline
+# All parameters in one place for reproducibility
+# =============================================================================
+
+# --- Random seed ---
+seed: 42
+
+# --- Image settings ---
+scale_factor: 2
+grayscale: true  # Paper operates on grayscale images
+
+# --- Observation model ---
+# Downsampling: non-overlapping averaging (box filter, stride=scale)
+# The paper uses this, NOT Gaussian blur + resize
+
+# --- Phase 1 SR (unweighted) ---
+phase1:
+  num_iterations: 3        # Paper specifies 3
+  lambda_reg: 0.0          # Paper specifies lambda=0 for Phase 1
+  mu: 0.1                  # OUR CHOICE — tuned on dev set (best=0.1, PSNR=32.30)
+  init: bicubic            # Paper: initial estimate = bicubic upscaling of g_c
+
+# --- Phase 2 SR (weighted by classifier) ---
+phase2:
+  num_iterations: 30       # OUR CHOICE — tuned on dev set (best=30 iters)
+  lambda_reg: 0.0          # Paper-faithful: lambda=0. Second run: tune on dev set
+  mu: 0.1                  # OUR CHOICE — tuned on dev set (same as Phase 1)
+  regulariser: laplacian   # Standard Tikhonov with Laplacian Q
+
+# --- Feature extraction ---
+features:
+  block_size: 7            # Paper: 7x7 block
+  gaussian_sigma: 0.4      # Paper: Gaussian window sigma=0.4
+  num_dft_coeffs: 25       # Paper: first 25 coefficients from each part
+  laplacian_kernel_size: 3  # Paper: 3x3 Laplace filter
+
+# --- PCA ---
+pca:
+  total_raw_features: 50   # 25 (part1) + 25 (part2)
+  drop_last_n: 6           # Paper: drop last 6 components
+  final_dim: 44            # 50 - 6 = 44
+
+# --- Training data ---
+training:
+  num_images: 42                    # Paper: 42 grayscale images
+  num_spatially_variant: 31         # First 31 with spatially variant error
+  num_spatially_invariant: 11       # Remaining 11 with spatially invariant error
+  sv_error_range: [0.5, 5.0]       # Uniform range for spatially variant (pixels)
+  si_error_range: [0.4, 1.5]       # Uniform range for spatially invariant (pixels)
+  num_dc_outliers: 5               # Paper: 5 SR images with changed DC level
+  num_wrong_bicubic_outliers: 5    # Paper: 5 with wrong bicubic LR for features
+  canny_grid_spacing: 15           # Paper: edge pixels on a 15-pixel grid
+  edge_detection: canny            # Paper: Canny edge detector
+
+# --- Data split ---
+split:
+  # Split BY IMAGE, never by pixel
+  num_train: 30             # OUR CHOICE
+  num_dev: 12               # OUR CHOICE
+  num_test_images: 19       # Set5(5) + Set14(14) held out for testing
+  k_folds: 5               # Grouped k-fold CV on train+dev
+  group_by: image           # Group = source image index
+
+# --- Classifier: Logistic Regression ---
+logistic:
+  learning_rate: 0.01       # Gradient ascent step size — OUR CHOICE
+  max_iterations: 1000      # OUR CHOICE
+  convergence_tol: 1e-6
+  l2_lambda: 0.0            # Baseline (paper): no regularisation
+  l2_lambda_tuned: null     # Filled in after CV
+
+# --- Classifier: Kernel SVM ---
+svm:
+  kernel: rbf
+  C: 1.0                    # Tuned via CV
+  gamma: scale              # Tuned via CV
+  probability: true         # Platt scaling for P(y=1|x)
+
+# --- Classifier: GDA ---
+gda:
+  regularise_cov: true      # Add epsilon*I if covariance is singular
+  cov_reg_eps: 1e-6
+
+# --- Registration ---
+registration:
+  method: block_matching     # Paper: quarter-pixel full-search block matching
+  block_size: 16             # OUR CHOICE
+  search_range: 8            # OUR CHOICE (pixels in LR domain)
+  subpixel_precision: 0.25   # Paper: quarter-pixel
+
+# --- Evaluation ---
+evaluation:
+  error_levels: [0.0, 0.25, 0.5, 1.0, 2.0]  # Registration error in pixels
+  num_lr_frames_sweep: [2, 3, 4, 6, 8, 10, 15, 20]
+  num_trials: 5              # Repeat with different random seeds
