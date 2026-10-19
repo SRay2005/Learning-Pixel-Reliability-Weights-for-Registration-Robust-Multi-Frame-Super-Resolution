@@ -1,47 +1,38 @@
-# ML-Based Super-Resolution Robust to Registration Errors
+# Learning Pixel-Reliability Weights for Registration-Robust Multi-Frame Super-Resolution
 
-
-A Python implementation of multi-frame image super-resolution using deep learning,
-specifically designed to be robust against registration (motion estimation) errors.
+A Comparison of Logistic Regression, Kernel SVM and Generative Classifiers
 
 ---
 
-## Problem
+## Paper
 
-Multi-frame super-resolution reconstructs a high-resolution (HR) image from multiple
-low-resolution (LR) frames. Traditional methods require **precise sub-pixel registration**
-between frames, but real-world motion estimation is imprecise. These registration errors
-cause severe artifacts in the final SR output.
+Implementation of: *"Machine Learning Based Super-Resolution Algorithm Robust to
+Registration Errors"* (Milchevski, Ivanovski, Mustafa, DSP/SPE 2011).
 
-## Our Approach
+Extended with Kernel SVM and Gaussian Discriminant Analysis classifiers
+for the MLEE (Machine Learning, EEE G513) course project at BITS Pilani.
 
-We train a neural network with **temporal attention fusion** that:
-1. **Learns to ignore misaligned frames** via attention weights
-2. **Trains with simulated registration errors** so the network becomes invariant to them
-3. **Uses robust loss functions** (Charbonnier) that don't amplify outlier errors
+## Method
 
-## Architecture
+Multi-frame SR reconstructs a high-resolution (HR) image from multiple
+low-resolution (LR) frames. Registration errors between frames cause
+severe artifacts. The paper addresses this by:
 
-```
-Input: N upsampled LR frames
-    │
-    ├─ Per-frame Feature Extraction (shared CNN + ResBlocks)
-    │
-    ├─ Temporal Attention Fusion (learns frame reliability)
-    │       ↓ Poorly registered frames get low weights
-    ├─ Deep Reconstruction (ResBlocks + Channel Attention)
-    │
-    └─ Residual Connection → HR Output
-```
+1. **Phase 1 SR** (unweighted): iterative gradient-descent SR from LR frames
+2. **Artifact detection**: per-pixel feature extraction (7x7 blocks, DFT,
+   Gaussian window, PCA) followed by a classifier that outputs a reliability
+   weight M(r,c) in [0,1]
+3. **Phase 2 SR** (weighted): the same SR update, but each frame's contribution
+   is weighted by its reliability map
 
-## Methods Compared
+### Classifiers compared
 
-| Method | Type | Multi-Frame | Robust to Reg Errors |
-|--------|------|-------------|----------------------|
-| Bicubic | Interpolation | ❌ | N/A |
-| Mean Fusion | Classical | ✅ | ❌ |
-| IBP (Irani & Peleg) | Classical | ✅ | ❌ |
-| **Ours (Robust ML)** | **Deep Learning** | ✅ | ✅ |
+| Classifier | Type | Source |
+|-----------|------|--------|
+| Logistic Regression | Discriminative | Paper baseline |
+| Logistic Regression (L2) | Discriminative | Our extension |
+| Kernel SVM (RBF) + Platt | Discriminative | Our contribution |
+| GDA (shared covariance) | Generative | Our contribution |
 
 ## Quick Start
 
@@ -50,60 +41,85 @@ Input: N upsampled LR frames
 pip install -r requirements.txt
 ```
 
-### 2. Run Everything (Train + Evaluate + Demo)
+### 2. Build Training Data (features from 42 images)
 ```bash
-python main.py --mode all --epochs 50
+python main.py build_data
 ```
 
-### 3. Quick Test (10 epochs)
+### 3. Train All Classifiers
 ```bash
-python main.py --mode all --quick
+python main.py train
 ```
 
-### 4. Individual Steps
+### 4. Run SR Demo
 ```bash
-# Download training data only
-python main.py --mode data
+python main.py demo
+```
 
-# Train only
-python main.py --mode train --epochs 50
-
-# Evaluate (requires trained model)
-python main.py --mode evaluate
-
-# Launch interactive demo
-python main.py --mode demo
+### 5. Full Pipeline
+```bash
+python main.py all
 ```
 
 ## Project Structure
 
 ```
 MLEE/
-├── main.py                  # 🚀 Main entry point
-├── requirements.txt         # Dependencies
-├── README.md                # This file
-├── src/
-│   ├── data_pipeline.py     # LR frame generation & augmentation
-│   ├── registration.py      # Phase correlation motion estimation
-│   ├── sr_model.py          # Neural network architecture
-│   ├── robust_loss.py       # Charbonnier, Huber, Edge, Perceptual losses
-│   ├── classical_sr.py      # Bicubic, Mean Fusion, IBP baselines
-│   ├── train.py             # Training pipeline
-│   ├── evaluate.py          # Evaluation & robustness analysis
-│   └── utils.py             # Image I/O, metrics, visualization
-├── demo/
-│   └── app.py               # Gradio interactive demo
-├── data/hr/                  # Training images
-├── checkpoints/              # Saved model weights
-└── results/                  # Output figures and metrics
++-- main.py                      # Entry point
++-- configs/
+|   +-- default.yaml             # All hyperparameters
++-- src/
+|   +-- observation_model.py     # W_i operator (shift + downsample)
+|   +-- sr_solver.py             # Phase 1 & Phase 2 iterative SR
+|   +-- feature_extraction.py    # 7x7 blocks, DFT, amplitude spectrum
+|   +-- pca_transform.py         # PCA dimensionality reduction (50->44)
+|   +-- artifact_detector.py     # Features -> PCA -> classifier -> weight map
+|   +-- training_data.py         # Build training set per paper protocol
+|   +-- data_split.py            # Image-level train/dev/test split
+|   +-- registration.py          # Phase correlation motion estimation
+|   +-- classical_sr.py          # Bicubic baseline
+|   +-- utils.py                 # Image I/O, metrics, seeds
+|   +-- classifiers/
+|       +-- base.py              # Abstract classifier interface
+|       +-- logistic.py          # Paper's logistic regression
+|       +-- svm.py               # Kernel SVM + Platt scaling
+|       +-- gda.py               # Gaussian Discriminant Analysis
++-- experiments/                  # One script per experiment
++-- tests/                       # Unit tests
++-- extras/
+|   +-- deep_cnn_baseline/       # Archived CNN approach (not the paper)
++-- data/hr/                     # Training/test images
++-- checkpoints/                 # Saved models, PCA, data splits
++-- results/                     # Tables, figures, CSV
++-- requirements.txt
++-- README.md
 ```
 
-## Expected Results
+## Evaluation
 
-The robustness curves show that as registration error increases:
-- Classical methods (IBP, Mean Fusion) degrade rapidly
-- Our ML method maintains significantly higher PSNR/SSIM
+- **Classifier metrics**: accuracy, precision, recall, F1, ROC-AUC, log-loss,
+  calibration curve
+- **SR metrics**: PSNR and SSIM
+- **Cost**: training time, inference time, parameter count / support vectors
+- **Controlled synthetic tests**: known ground truth, error levels 0-2 px
+- **Ablations**: feature parts, PCA components, block size, Phase-1 iterations
+
+## Key Design Decisions
+
+| Decision | Value | Source |
+|----------|-------|--------|
+| Downsampling | Non-overlapping averaging | Paper |
+| Phase 1 iterations | 3 | Paper |
+| Phase 1 lambda | 0 | Paper |
+| Step size mu | Tuned on dev set | Our choice |
+| Phase 2 iterations | Tuned on dev set | Our choice |
+| Feature block size | 7x7 | Paper |
+| Gaussian window sigma | 0.4 | Paper |
+| PCA components kept | 44 (drop last 6) | Paper |
+| Data split | By image, never by pixel | Our choice |
+| Random seeds | Fixed (42) | Our choice |
 
 ## Reference
 
-Based on: *"Machine Learning Based Super-Resolution Algorithm Robust to Registration Errors"*
+Milchevski, Ivanovski, Mustafa. *"Machine Learning Based Super-Resolution
+Algorithm Robust to Registration Errors."* DSP/SPE 2011.
