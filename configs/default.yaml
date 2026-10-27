@@ -73,8 +73,8 @@ logistic:
 # --- Classifier: Kernel SVM ---
 svm:
   kernel: rbf
-  C: 1.0                    # Tuned via CV
-  gamma: scale              # Tuned via CV
+  C: 100.0                  # TUNED via 5-fold CV (best AUC=0.8497)
+  gamma: 0.01               # TUNED via 5-fold CV
   probability: true         # Platt scaling for P(y=1|x)
 
 # --- Classifier: GDA ---
