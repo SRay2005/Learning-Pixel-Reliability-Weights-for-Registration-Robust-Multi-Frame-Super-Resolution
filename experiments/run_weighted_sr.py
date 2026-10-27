@@ -186,7 +186,7 @@ def run_weighted_sr_experiment():
     mu = 0.1           # TUNED on dev set
     phase1_iters = 3
     phase2_iters = 30  # TUNED on dev set
-    n_trials = 3
+    n_trials = 5
     error_levels = [0.0, 0.25, 0.5, 1.0, 2.0]
 
     # Load PCA
@@ -205,7 +205,7 @@ def run_weighted_sr_experiment():
     try:
         svm_clf = KernelSVMClassifier()
         svm_clf.load(os.path.join(ckpt_dir,
-                     'KernelSVM(C=1.0, gamma=scale).joblib'))
+                     'KernelSVM(C=100.0, gamma=0.01).joblib'))
         classifiers.append(('SVM', svm_clf))
     except Exception as e:
         print(f"  Warning: Could not load SVM: {e}")
