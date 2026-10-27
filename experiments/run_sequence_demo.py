@@ -136,13 +136,13 @@ def run_sequence(seq_name, seq_dir, results_dir, scale=2, n_frames=4):
     H, W = frames[0].shape
     H_hr, W_hr = H * scale, W * scale
 
-    save_image(os.path.join(seq_results, 'lr_frame0.png'), frames[0])
-    save_image(os.path.join(seq_results, 'bicubic.png'),
-               np.clip(bic[:H_hr, :W_hr], 0, 1))
-    save_image(os.path.join(seq_results, 'sr_unweighted.png'),
-               np.clip(sr_uw[:H_hr, :W_hr], 0, 1))
-    save_image(os.path.join(seq_results, 'sr_weighted_svm.png'),
-               np.clip(sr_weighted[:H_hr, :W_hr], 0, 1))
+    save_image(frames[0], os.path.join(seq_results, 'lr_frame0.png'))
+    save_image(np.clip(bic[:H_hr, :W_hr], 0, 1),
+               os.path.join(seq_results, 'bicubic.png'))
+    save_image(np.clip(sr_uw[:H_hr, :W_hr], 0, 1),
+               os.path.join(seq_results, 'sr_unweighted.png'))
+    save_image(np.clip(sr_weighted[:H_hr, :W_hr], 0, 1),
+               os.path.join(seq_results, 'sr_weighted_svm.png'))
 
     # Weight map visualization
     if len(weight_maps) > 1:
